@@ -4,6 +4,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
@@ -13,6 +15,7 @@
 #define STACKSIZE 500
 #define PRIORITY 5
 #define UART_MESSAGE_SIZE 32
+#define DEBUG_MESSAGE_SIZE 96
 
 #define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
 
@@ -34,10 +37,16 @@ struct parsed_command {
     int duration_ms;
 };
 
+struct debug_message {
+    void *fifo_reserved;
+    char text[DEBUG_MESSAGE_SIZE];
+};
+
 K_FIFO_DEFINE(uart_fifo);
 K_FIFO_DEFINE(red_fifo);
 K_FIFO_DEFINE(yellow_fifo);
 K_FIFO_DEFINE(green_fifo);
+K_FIFO_DEFINE(debug_fifo);
 
 K_MUTEX_DEFINE(red_mutex);
 K_MUTEX_DEFINE(yellow_mutex);
@@ -50,6 +59,7 @@ K_CONDVAR_DEFINE(green_condition);
 K_SEM_DEFINE(release_signal, 0, 1);
 
 static uint64_t last_task_elapsed_us;
+static volatile bool debug_enabled = true;
 
 /* MÄÄRITTELYT */
 
@@ -59,25 +69,46 @@ static const struct gpio_dt_spec red =
 static const struct gpio_dt_spec green =
     GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 
+static void debug_log(const char *format, ...)
+{
+    struct debug_message *message;
+    va_list args;
+
+    if (!debug_enabled) {
+        return;
+    }
+
+    message = k_malloc(sizeof(struct debug_message));
+    if (message == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintk(message->text, sizeof(message->text), format, args);
+    va_end(args);
+
+    k_fifo_put(&debug_fifo, message);
+}
+
 static int init_leds(void)
 {
     int ret;
 
     if (!gpio_is_ready_dt(&red) ||
         !gpio_is_ready_dt(&green)) {
-        printk("Ledit eivät ole valmiina\n");
+        debug_log("Ledit eivät ole valmiina\n");
         return -1;
     }
 
     ret = gpio_pin_configure_dt(&red, GPIO_OUTPUT_INACTIVE);
     if (ret < 0) {
-        printk("Punaisen LEDin konfigurointi epäonnistui\n");
+        debug_log("Punaisen LEDin konfigurointi epäonnistui\n");
         return ret;
     }
 
     ret = gpio_pin_configure_dt(&green, GPIO_OUTPUT_INACTIVE);
     if (ret < 0) {
-        printk("Vihreän LEDin konfigurointi epäonnistui\n");
+        debug_log("Vihreän LEDin konfigurointi epäonnistui\n");
         return ret;
     }
 
@@ -87,7 +118,7 @@ static int init_leds(void)
 static int init_uart(void)
 {
     if (!device_is_ready(uart_dev)) {
-        printk("UART ei ole valmis\n");
+        debug_log("UART ei ole valmis\n");
         return -1;
     }
 
@@ -100,7 +131,7 @@ static bool send_red_command(int duration_ms)
         k_malloc(sizeof(struct light_command));
 
     if (command == NULL) {
-        printk("Punaisen komennon muistin varaus epäonnistui\n");
+        debug_log("Punaisen komennon muistin varaus epäonnistui\n");
         return false;
     }
 
@@ -120,7 +151,7 @@ static bool send_green_command(int duration_ms)
         k_malloc(sizeof(struct light_command));
 
     if (command == NULL) {
-        printk("Vihreän komennon muistin varaus epäonnistui\n");
+        debug_log("Vihreän komennon muistin varaus epäonnistui\n");
         return false;
     }
 
@@ -140,7 +171,7 @@ static bool send_yellow_command(int duration_ms)
         k_malloc(sizeof(struct light_command));
 
     if (command == NULL) {
-        printk("Keltaisen komennon muistin varaus epäonnistui\n");
+        debug_log("Keltaisen komennon muistin varaus epäonnistui\n");
         return false;
     }
 
@@ -188,8 +219,8 @@ static void red_task(void *p1, void *p2, void *p3)
 
             last_task_elapsed_us = elapsed_us;
 
-            printk("Punaisen taskin kesto: %llu us\n",
-                   (unsigned long long)elapsed_us);
+                 debug_log("Punaisen taskin kesto: %llu us\n",
+                     (unsigned long long)elapsed_us);
 
             k_free(command);
             k_sem_give(&release_signal);
@@ -229,8 +260,8 @@ static void green_task(void *p1, void *p2, void *p3)
 
             last_task_elapsed_us = elapsed_us;
 
-            printk("Vihreän taskin kesto: %llu us\n",
-                   (unsigned long long)elapsed_us);
+                 debug_log("Vihreän taskin kesto: %llu us\n",
+                     (unsigned long long)elapsed_us);
 
             k_free(command);
             k_sem_give(&release_signal);
@@ -272,8 +303,8 @@ static void yellow_task(void *p1, void *p2, void *p3)
 
             last_task_elapsed_us = elapsed_us;
 
-            printk("Keltaisen taskin kesto: %llu us\n",
-                   (unsigned long long)elapsed_us);
+                 debug_log("Keltaisen taskin kesto: %llu us\n",
+                     (unsigned long long)elapsed_us);
 
             k_free(command);
             k_sem_give(&release_signal);
@@ -328,6 +359,9 @@ static bool parse_command(const char *text,
 {
     char extra;
 
+    __ASSERT(text != NULL, "Komennon teksti puuttuu");
+    __ASSERT(command != NULL, "Komentorakenne puuttuu");
+
     int fields = sscanf(text,
                 " %c,%d %c",
                 &command->color,
@@ -351,9 +385,30 @@ static bool parse_command(const char *text,
     return true;
 }
 
+static void debug_task(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    while (true) {
+        struct debug_message *message =
+            k_fifo_get(&debug_fifo, K_FOREVER);
+
+        if (message != NULL) {
+            printk("%s", message->text);
+            k_free(message);
+        }
+    }
+}
+
 static uint64_t dispatch_command(struct parsed_command *command)
 {
     bool command_sent = false;
+
+    __ASSERT(command != NULL, "Lähetettävä komento puuttuu");
+    __ASSERT(command->duration_ms >= 0,
+             "Valon kesto ei voi olla negatiivinen");
 
     if (command->color == 'R') {
         command_sent =
@@ -378,10 +433,23 @@ static uint64_t dispatch_command(struct parsed_command *command)
 static void dispatcher_task(void *p1, void *p2, void *p3)
 {
     static uint64_t sequence_total_us = 0;
+    static unsigned int sequence_command_count = 0;
 
     while (true) {
         struct uart_message *message =
             k_fifo_get(&uart_fifo, K_FOREVER);
+        uint64_t processing_start_us = k_uptime_get() * 1000ULL;
+
+        __ASSERT(message != NULL, "UART-viesti puuttuu");
+
+        if (strcmp(message->text, "D") == 0) {
+            debug_enabled = !debug_enabled;
+            if (debug_enabled) {
+                debug_log("Debug-tulostukset päällä\n");
+            }
+            k_free(message);
+            continue;
+        }
 
        /* printk("Dispatcher sai viestin %s\n",
                message->text); */
@@ -391,6 +459,7 @@ static void dispatcher_task(void *p1, void *p2, void *p3)
         if (parse_command(message->text, &command)) {
             if (command.color == 'R') {
                 sequence_total_us = 0;
+                sequence_command_count = 0;
             }
 
             /*printk("Väri: %c, aika: %d ms\n",
@@ -399,14 +468,20 @@ static void dispatcher_task(void *p1, void *p2, void *p3)
 
             sequence_total_us +=
                 dispatch_command(&command);
+            sequence_command_count++;
+
+            debug_log("Komennon käsittelyaika dispatcherissa: %llu us\n",
+                      (unsigned long long)
+                      (k_uptime_get() * 1000ULL - processing_start_us));
 
             if (command.color == 'G') {
-                printk("Sekvenssin kokonaisaika: %llu us\n",
-                       (unsigned long long)sequence_total_us);
+                debug_log("Sekvenssin kokonaisaika (%u komentoa): %llu us\n",
+                          sequence_command_count,
+                          (unsigned long long)sequence_total_us);
             }
         } else {
-            printk("Virheellinen komento: %s\n",
-                   message->text);
+            debug_log("Virheellinen komento: %s\n",
+                      message->text);
         }
 
         k_free(message);
@@ -460,6 +535,16 @@ K_THREAD_DEFINE(dispatcher_thread,
         NULL,
         NULL,
         PRIORITY,
+        0,
+        0);
+
+    K_THREAD_DEFINE(debug_thread,
+        STACKSIZE,
+        debug_task,
+        NULL,
+        NULL,
+        NULL,
+        PRIORITY + 2,
         0,
         0);
 
