@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <zephyr/kernel.h>
@@ -68,6 +69,53 @@ static const struct gpio_dt_spec red =
 
 static const struct gpio_dt_spec green =
     GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+
+#define TIME_LEN_ERROR   -1
+#define TIME_ARRAY_ERROR -2
+#define TIME_VALUE_ERROR -3
+#define TIME_ZERO_ERROR  -4
+
+static struct k_timer red_timer;
+K_SEM_DEFINE(red_timer_expired, 0, 1);
+
+static int time_parse(char *time)
+{
+    if (time == NULL) {
+        return TIME_ARRAY_ERROR;
+    }
+
+    if (strlen(time) != 6) {
+        return TIME_LEN_ERROR;
+    }
+
+    for (int index = 0; index < 6; index++) {
+        if (!isdigit((unsigned char)time[index])) {
+            return TIME_ARRAY_ERROR;
+        }
+    }
+
+    int hours = (time[0] - '0') * 10 + (time[1] - '0');
+    int minutes = (time[2] - '0') * 10 + (time[3] - '0');
+    int seconds = (time[4] - '0') * 10 + (time[5] - '0');
+
+    if (hours > 23 || minutes > 59 || seconds > 59) {
+        return TIME_VALUE_ERROR;
+    }
+
+    int total_seconds = hours * 3600 + minutes * 60 + seconds;
+
+    if (total_seconds == 0) {
+        return TIME_ZERO_ERROR;
+    }
+
+    return total_seconds;
+}
+
+static void red_timer_expiry(struct k_timer *timer)
+{
+    ARG_UNUSED(timer);
+    k_sem_give(&red_timer_expired);
+}
 
 static void debug_log(const char *format, ...)
 {
@@ -385,6 +433,21 @@ static bool parse_command(const char *text,
     return true;
 }
 
+static void red_timer_task(void *p1, void *p2, void *p3)
+{
+   ARG_UNUSED(p1);
+   ARG_UNUSED(p2);
+   ARG_UNUSED(p3);
+
+   while (true) {
+    k_sem_take(&red_timer_expired, K_FOREVER);
+
+    if (send_red_command(1000)) {
+        debug_log("Punainen valo syttyy 1000ms\n");
+    }
+   }
+}
+
 static void debug_task(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1);
@@ -455,6 +518,16 @@ static void dispatcher_task(void *p1, void *p2, void *p3)
                message->text); */
 
         struct parsed_command command;
+        int delay_seconds = time_parse(message->text);
+
+        if (delay_seconds > 0) {
+            k_timer_start(&red_timer, K_SECONDS(delay_seconds), K_NO_WAIT);
+
+            debug_log("Ajastin käynnistetty %d sekunniksi\n", delay_seconds);
+
+            k_free(message);
+            continue;
+        }
 
         if (parse_command(message->text, &command)) {
             if (command.color == 'R') {
@@ -548,8 +621,20 @@ K_THREAD_DEFINE(dispatcher_thread,
         0,
         0);
 
+    K_THREAD_DEFINE(red_timer_thread,
+        STACKSIZE,
+        red_timer_task,
+        NULL,
+        NULL,
+        NULL,
+        PRIORITY,
+        0,
+        0);
+
 int main(void)
 {
+    k_timer_init(&red_timer, red_timer_expiry, NULL);
+
     int ret = init_leds();
 
     if (ret < 0) {

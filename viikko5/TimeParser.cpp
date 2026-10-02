@@ -26,5 +26,11 @@ int time_parse(char *time) {
         return TIME_VALUE_ERROR;
     }
 
-    return hours * 3600 + minutes * 60 + seconds;
+    int total_seconds = hours * 3600 + minutes * 60 + seconds;
+
+    if (total_seconds == 0) {
+        return TIME_ZERO_ERROR;
+    }
+
+    return total_seconds;
 }

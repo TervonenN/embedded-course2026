@@ -1,3 +1,4 @@
 {
-    "nrf-connect.applications": []
+    "nrf-connect.applications": [],
+    "cmake.sourceDirectory": "C:/sulautetut/viikko2"
 }

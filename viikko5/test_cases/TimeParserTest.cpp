@@ -43,10 +43,10 @@ TEST(TimeParserTest, RejectsSecondAboveMaximum)
     ASSERT_EQ(time_parse(time_test), TIME_VALUE_ERROR);
 }
 
-TEST(TimeParserTest, AcceptsZeroTime)
+TEST(TimeParserTest, RejectsZeroTime)
 {
     char time_test[] = "000000";
-    ASSERT_EQ(time_parse(time_test), 0);
+    ASSERT_EQ(time_parse(time_test), TIME_ZERO_ERROR);
 }
 
 TEST(TimeParserTest, RejectsNullPointer)
