@@ -1,5 +1,5 @@
 /*
- * Tavoite: Maksimipisteet, koska miksi ei?
+ * Tavoite: Täydet pisteet, koska miksi ei?
  */
 
 #include <stdio.h>
@@ -145,6 +145,17 @@ static void send_uart_integer(int value)
 
     for (int index = 0; index < length; index++) {
         uart_poll_out(uart_dev, response[index]);
+    }
+}
+
+static void send_uart_debug(uint64_t elapsed_us)
+{
+    char response[32];
+    uint64_t elapsed_ms = elapsed_us / 1000ULL;
+    int length = snprintk(response, sizeof(response), "DEBUG %llu msX", (unsigned long long)elapsed_ms);
+
+    for (int i = 0; i < length; i++) {
+        uart_poll_out(uart_dev, response[i]);
     }
 }
 
@@ -517,10 +528,20 @@ static void dispatcher_task(void *p1, void *p2, void *p3)
         __ASSERT(message != NULL, "UART-viesti puuttuu");
 
         if (strcmp(message->text, "D") == 0) {
-            debug_enabled = !debug_enabled;
-            if (debug_enabled) {
-                debug_log("Debug-tulostukset päällä\n");
-            }
+           struct parsed_command debug_commands[] = {
+            {'R', 1000},
+            {'G', 1000},
+            {'Y', 1000},
+           };
+
+           uint64_t sequence_elapsed_us = 0;
+
+           for (size_t i = 0; i < sizeof(debug_commands) / sizeof(debug_commands[0]); i++) {
+            sequence_elapsed_us += dispatch_command(&debug_commands[i]);
+           }
+
+           send_uart_debug(sequence_elapsed_us);
+           
             k_free(message);
             continue;
         }

@@ -69,10 +69,15 @@ Rejects Too Long Time
 Rejects Non Numeric Characters
     Send And Expect     12A405X     -2X
 
+Debug Duration Is Returned
+    ${read}=    Send Debug Command
+    Log To Console    Debug response: ${read}
+    Should Not Be Empty    ${read}
+
 *** Keywords ***
 Connect Serial
     Log To Console    Connecting to ${BOARD} on ${COM}
-    Add Port    ${COM}    baudrate=${BAUD}    encoding=ascii
+    Add Port    ${COM}    baudrate=${BAUD}    encoding=ascii 
     Port Should Be Open    ${COM}
     Reset Input Buffer
     Reset Output Buffer
@@ -88,6 +93,13 @@ Send And Expect
     ${read}=    Read Until    terminator=58    encoding=ascii
     Log To Console    Received ${read}
     Should Be Equal As Strings    ${read}    ${expected}
+
+Send Debug Command
+    Prepare Serial Test
+    Write Data    DX    encoding=ascii
+    ${read}=    Read Until    terminator=58    encoding=ascii
+    Log To Console    Received ${read}
+    RETURN    ${read}
 
 Disconnect Serial
     Delete Port    ${COM}
