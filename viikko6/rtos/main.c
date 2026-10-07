@@ -138,6 +138,16 @@ static void debug_log(const char *format, ...)
     k_fifo_put(&debug_fifo, message);
 }
 
+static void send_uart_integer(int value)
+{
+    char response[24];
+    int length = snprintk(response, sizeof(response), "%dX", value);
+
+    for (int index = 0; index < length; index++) {
+        uart_poll_out(uart_dev, response[index]);
+    }
+}
+
 static int init_leds(void)
 {
     int ret;
@@ -369,7 +379,8 @@ static void uart_task(void *p1, void *p2, void *p3)
         unsigned char received;
 
         if (uart_poll_in(uart_dev, &received) == 0) {
-            if (received == '\r' ||
+            if (received == 'X' ||
+                received == '\r' ||
                 received == '\n') {
                 if (length > 0) {
                     struct uart_message *item =
@@ -520,7 +531,18 @@ static void dispatcher_task(void *p1, void *p2, void *p3)
         struct parsed_command command;
         int delay_seconds = time_parse(message->text);
 
-        
+        if (strchr(message->text, ',') == NULL) {
+            send_uart_integer(delay_seconds);
+
+            if (delay_seconds > 0) {
+                k_timer_start(&red_timer, K_SECONDS(delay_seconds), K_NO_WAIT);
+                debug_log("Ajastin käynnistetty %d sekunniksi\n", delay_seconds);
+            }
+
+            k_free(message);
+            continue;
+        }
+
         if (delay_seconds > 0) {
             k_timer_start(&red_timer, K_SECONDS(delay_seconds), K_NO_WAIT);
 
